@@ -1,0 +1,121 @@
+name: "git-vbranch checkout"
+description: "Install git-vbranch and check out the virtual branch the current PR/MR participates in."
+author: "Pierre Smeyers"
+branding:
+  icon: "git-branch"
+  color: "purple"
+
+inputs:
+  label:
+    description: "Label (or regex with one capture group) identifying virtual branches."
+    required: false
+    default: "vbranch:(.+)"
+  allowed-bases:
+    description: "Comma-separated regex list of accepted base branches. Defaults to the repo's default branch."
+    required: false
+  format:
+    description: "Output format for virtual branch listings (`tree` or `table`)."
+    required: false
+    default: "tree"
+  no-color:
+    description: "Disable ANSI colors and terminal hyperlinks."
+    required: false
+    default: "false"
+  verbose:
+    description: "Enable debug-level logging."
+    required: false
+    default: "false"
+  fallback-rebase:
+    description: "When the PR is not a member of any virtual branch but targets an allowed base, rebase the current branch onto that base instead of exiting with nothing to do."
+    required: false
+    default: "false"
+  token:
+    description: "API token used to query the forge. Defaults to the workflow's GITHUB_TOKEN, which works on GitHub / Gitea / Forgejo Actions runners. Override when you need a PAT with additional scopes."
+    required: false
+    default: ${{ github.token }}
+  version:
+    description: "Release tag of git-vbranch to install (e.g. `v1.2.0`, `v1.2`, `v1`). Defaults to the latest release."
+    required: false
+    default: "latest"
+  skip-checkout:
+    description: "Skip the `actions/checkout` step (set to `true` if you have already checked out the repo)."
+    required: false
+    default: "false"
+
+outputs:
+  VBRANCH_NAME:
+    description: "Captured label value (e.g. `dev` for `vbranch:dev`)."
+    value: ${{ steps.run.outputs.VBRANCH_NAME }}
+  VBRANCH_REF:
+    description: "Local ref name materializing the virtual branch (`virtual/<name>`)."
+    value: ${{ steps.run.outputs.VBRANCH_REF }}
+  VBRANCH_BASE:
+    description: "Base branch of the member PRs/MRs."
+    value: ${{ steps.run.outputs.VBRANCH_BASE }}
+  VBRANCH_MEMBER_PR_IDS:
+    description: "Comma-separated list of member PR/MR IDs."
+    value: ${{ steps.run.outputs.VBRANCH_MEMBER_PR_IDS }}
+  VBRANCH_MEMBER_REFS:
+    description: "Comma-separated list of member source branches."
+    value: ${{ steps.run.outputs.VBRANCH_MEMBER_REFS }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout
+      if: inputs.skip-checkout != 'true'
+      uses: actions/checkout@v4
+
+    - name: Install git-vbranch
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$(uname -s)" in
+          Linux*) OS=linux ;;
+          Darwin*) OS=darwin ;;
+          MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+          *) echo "::error::unsupported OS $(uname -s)"; exit 1 ;;
+        esac
+        case "$(uname -m)" in
+          x86_64|amd64) ARCH=amd64 ;;
+          arm64|aarch64) ARCH=arm64 ;;
+          *) echo "::error::unsupported arch $(uname -m)"; exit 1 ;;
+        esac
+        ASSET="$OS-$ARCH"
+        if [ "$INPUT_VERSION" = "latest" ]; then
+          URL_BASE="https://github.com/pismy/git-vbranch/releases/latest/download"
+        else
+          URL_BASE="https://github.com/pismy/git-vbranch/releases/download/$INPUT_VERSION"
+        fi
+        echo "Installing git-vbranch for $ASSET from $URL_BASE"
+        if [ "$OS" = "windows" ]; then
+          curl -fsSL -o "$RUNNER_TEMP/git-vbranch.zip" "$URL_BASE/git-vbranch-$ASSET.zip"
+          unzip -o "$RUNNER_TEMP/git-vbranch.zip" -d "$RUNNER_TEMP"
+        else
+          curl -fsSL "$URL_BASE/git-vbranch-$ASSET.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+        fi
+        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+    - name: Run git vbranch checkout
+      id: run
+      shell: bash
+      env:
+        # Tool-consumed env vars (see cli.rs for the mapping).
+        # The tool auto-detects `$GITHUB_OUTPUT` and writes the VBRANCH_* vars
+        # there, which feeds the `outputs:` contract declared above.
+        GITHUB_TOKEN: ${{ inputs.token }}
+        GIT_VBRANCH_LABEL: ${{ inputs.label }}
+        GIT_VBRANCH_ALLOWED_BASES: ${{ inputs.allowed-bases }}
+        GIT_VBRANCH_FALLBACK_REBASE: ${{ inputs.fallback-rebase == 'true' && 'true' || '' }}
+        # Standard `NO_COLOR` convention, auto-respected by the tool.
+        NO_COLOR: ${{ inputs.no-color == 'true' && '1' || '' }}
+        # No env-var equivalent for --format / --verbose, still passed as flags.
+        # INPUT_VERBOSE uses the "set vs empty" pattern so `${VAR:+flag}` below
+        # either expands to `--verbose` or disappears entirely.
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_VERBOSE: ${{ inputs.verbose == 'true' && '1' || '' }}
+      run: |
+        set -euo pipefail
+        git vbranch checkout --format "$INPUT_FORMAT" ${INPUT_VERBOSE:+--verbose}
