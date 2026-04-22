@@ -1,6 +1,6 @@
 [package]
 name = "git-vbranch"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Virtual branches for Git: group PRs/MRs by label and materialize them as a single merged state."
 license = "MIT"
